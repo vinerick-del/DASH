@@ -359,6 +359,64 @@ def to_records(df):
         rows.append(clean)
     return rows
 
+# ─────────────────────────────────────────────
+# 8. ME3L – Contratos vigentes
+# ─────────────────────────────────────────────
+DATA_ANALISE = pd.Timestamp('2026-06-01')
+
+me3l = pd.read_excel(BASE / 'ME3L.xlsx')
+me3l['Material'] = pd.to_numeric(me3l['Material'], errors='coerce')
+me3l = me3l.dropna(subset=['Material'])
+me3l['Material'] = me3l['Material'].astype(int)
+me3l['Fim da validade'] = pd.to_datetime(me3l['Fim da validade'], errors='coerce')
+me3l['Início per.validade'] = pd.to_datetime(me3l['Início per.validade'], errors='coerce')
+me3l['Data do documento'] = pd.to_datetime(me3l['Data do documento'], errors='coerce')
+
+# Regra de tipo: pendente == 1 → Acordo de Preço (ilimitado em qty, limitado por data)
+#                pendente != 1 → Acordo de Quantidade (limitado pelo saldo pendente)
+me3l['TIPO_CONTRATO'] = me3l['Qtd.prev.pendente'].apply(
+    lambda q: 'Acordo de Preço' if q == 1 else 'Acordo de Quantidade'
+)
+
+# Filtrar contratos vigentes (Fim >= data de análise)
+me3l_vigente = me3l[me3l['Fim da validade'] >= DATA_ANALISE].copy()
+
+# Para Acordo de Quantidade: excluir os com saldo = 0 (totalmente consumidos)
+me3l_vigente = me3l_vigente[
+    (me3l_vigente['TIPO_CONTRATO'] == 'Acordo de Preço') |
+    (me3l_vigente['Qtd.prev.pendente'] > 0)
+].copy()
+
+# Formatar datas como string
+for col in ['Data do documento', 'Início per.validade', 'Fim da validade']:
+    me3l_vigente[col] = me3l_vigente[col].dt.strftime('%d/%m/%Y')
+
+# Montar registro limpo
+contratos_records = me3l_vigente.rename(columns={
+    'Documento de compras':      'CONTRATO',
+    'Fornecedor/centro fornecedor': 'FORNECEDOR',
+    'Data do documento':         'DATA_CRIACAO',
+    'Material':                  'CODIGO',
+    'Texto breve':               'DESCRICAO',
+    'Início per.validade':       'INICIO_VIGENCIA',
+    'Fim da validade':           'FIM_VIGENCIA',
+    'Preço líquido':             'PRECO_UNITARIO',
+    'Quantidade prevista':       'QTD_PREVISTA',
+    'Qtd.prev.pendente':         'QTD_DISPONIVEL',
+})[['CONTRATO','FORNECEDOR','DATA_CRIACAO','CODIGO','DESCRICAO',
+     'INICIO_VIGENCIA','FIM_VIGENCIA','PRECO_UNITARIO',
+     'QTD_PREVISTA','QTD_DISPONIVEL','TIPO_CONTRATO']].copy()
+
+# Valor disponível estimado (para Acordo de Qtd: qty_disp * preço)
+contratos_records['VALOR_DISPONIVEL'] = contratos_records.apply(
+    lambda r: r['QTD_DISPONIVEL'] * r['PRECO_UNITARIO']
+    if r['TIPO_CONTRATO'] == 'Acordo de Quantidade' else None, axis=1
+)
+
+print(f"  Contratos: {len(contratos_records)} vigentes "
+      f"({(contratos_records['TIPO_CONTRATO']=='Acordo de Preço').sum()} preço, "
+      f"{(contratos_records['TIPO_CONTRATO']=='Acordo de Quantidade').sum()} quantidade)")
+
 dados = {
     'detalhado': to_records(det[[
         'CODIGO','DEPARTAMENTO','DESCRICAO',
@@ -373,6 +431,7 @@ dados = {
     'departamentos': to_records(depto_agg.sort_values('DEPARTAMENTO')),
     'programas':     to_records(prog_agg.sort_values('PROGRAMA_ORC')),
     'pedidos':       to_records(pedidos_records),
+    'contratos':     to_records(contratos_records.sort_values(['CONTRATO','CODIGO'])),
     'filtros': {
         'departamentos': sorted(det['DEPARTAMENTO'].dropna().unique().tolist()),
         'programas':     sorted(dem['PROGRAMA_ORC'].dropna().unique().tolist()),
