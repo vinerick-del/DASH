@@ -45,6 +45,18 @@ saldo = saldo.groupby('CODIGO', as_index=False)['SALDO_ATUAL'].sum()
 #    Saídas são negativas; devoluções positivas. Net = soma algébrica.
 #    Consumo = max(0, -net)
 # ─────────────────────────────────────────────
+# Montante financeiro (formato BR: ponto=milhar, vírgula=decimal)
+mb51['MONTANTE_NUM'] = (mb51['MONTANTE'].astype(str)
+    .str.replace('.','', regex=False).str.replace(',','.', regex=False))
+mb51['MONTANTE_NUM'] = pd.to_numeric(mb51['MONTANTE_NUM'], errors='coerce').fillna(0)
+
+# Valor financeiro retirado por departamento (soma algébrica → negativo = saída)
+valor_depto_mb51 = (
+    mb51.groupby('DEPARTAMENTO', as_index=False)['MONTANTE_NUM'].sum()
+    .rename(columns={'MONTANTE_NUM':'NET_MONTANTE'})
+)
+valor_depto_mb51['VALOR_RETIRADO'] = (-valor_depto_mb51['NET_MONTANTE']).clip(lower=0)
+
 consumo = (
     mb51.groupby(['MATERIAL','DEPARTAMENTO'], as_index=False)['QTD'].sum()
     .rename(columns={'MATERIAL':'CODIGO','QTD':'NET_QTD'})
@@ -120,6 +132,16 @@ det['STATUS_COBERTURA'] = det['COBERTURA_MESES'].apply(status_cobertura)
 det['STATUS_CONSUMO']   = det.apply(
     lambda r: status_consumo(r['CONSUMO_REAL_JAN_MAI'], r['DEMANDA_JAN_MAI']), axis=1)
 
+# Quantidade necessária para pedido (elevar ao estoque adequado = 7 meses)
+# Taxa base: consumo histórico médio/mês; se zero, usa demanda planejada/mês
+det['TAXA_BASE'] = det.apply(
+    lambda r: r['CONSUMO_REAL_JAN_MAI'] / 5 if r['CONSUMO_REAL_JAN_MAI'] > 0
+              else r['DEMANDA_JAN_MAI'] / 5 if r['DEMANDA_JAN_MAI'] > 0
+              else r['DEMANDA_JUN_DEZ'] / 7, axis=1)
+det['ESTOQUE_SEGURO'] = (det['TAXA_BASE'] * 7).round(0)
+# QTD_NECESSARIA = meta - (saldo atual + pedidos em aberto); apenas se positivo
+# Preenchido depois do merge com ME2L (usa QTD_PEDIDO)
+
 # ─────────────────────────────────────────────
 # 5. TABELA POR DEPARTAMENTO
 # ─────────────────────────────────────────────
@@ -149,6 +171,11 @@ depto_agg = depto_agg.merge(
     on='DEPARTAMENTO', how='left'
 ).fillna({'CRÍTICO':0,'ABAIXO':0,'ADEQUADO':0})
 depto_agg[['CRÍTICO','ABAIXO','ADEQUADO']] = depto_agg[['CRÍTICO','ABAIXO','ADEQUADO']].astype(int)
+
+# Valor financeiro retirado por departamento (do MB51)
+depto_agg = depto_agg.merge(
+    valor_depto_mb51[['DEPARTAMENTO','VALOR_RETIRADO']], on='DEPARTAMENTO', how='left'
+).fillna({'VALOR_RETIRADO': 0})
 
 # ─────────────────────────────────────────────
 # 6. TABELA POR PROGRAMA ORÇAMENTÁRIO
@@ -260,6 +287,11 @@ det['COBERTURA_COM_PEDIDO'] = det.apply(
     lambda r: cobertura_meses(r['SALDO_ATUAL'] + r['QTD_PEDIDO'], r['DEMANDA_JUN_DEZ']), axis=1)
 det['STATUS_COB_COM_PEDIDO'] = det['COBERTURA_COM_PEDIDO'].apply(status_cobertura)
 
+# QTD necessária para pedido: estoque seguro (7 meses) menos o que já existe+pedido
+det['QTD_NECESSARIA_PEDIDO'] = (
+    det['ESTOQUE_SEGURO'] - det['SALDO_ATUAL'] - det['QTD_PEDIDO']
+).clip(lower=0).round(0)
+
 # Lista completa de pedidos para a nova aba
 pedidos_records = me2l_aberto[[
     'Material', 'Texto breve', 'Documento de compras', 'Requisição de compra',
@@ -307,7 +339,8 @@ dados = {
         'SALDO_ATUAL','CONSUMO_MES_MEDIO_JUN_DEZ',
         'COBERTURA_MESES','STATUS_COBERTURA','STATUS_CONSUMO',
         'QTD_PEDIDO','VALOR_PEDIDO','PROXIMA_ENTREGA',
-        'COBERTURA_COM_PEDIDO','STATUS_COB_COM_PEDIDO'
+        'COBERTURA_COM_PEDIDO','STATUS_COB_COM_PEDIDO',
+        'QTD_NECESSARIA_PEDIDO','TAXA_BASE','ESTOQUE_SEGURO'
     ]].sort_values(['DEPARTAMENTO','CODIGO'])),
     'departamentos': to_records(depto_agg.sort_values('DEPARTAMENTO')),
     'programas':     to_records(prog_agg.sort_values('PROGRAMA_ORC')),
@@ -315,6 +348,22 @@ dados = {
     'filtros': {
         'departamentos': sorted(det['DEPARTAMENTO'].dropna().unique().tolist()),
         'programas':     sorted(dem['PROGRAMA_ORC'].dropna().unique().tolist()),
+        # lookup: programa → lista de "CODIGO|DEPARTAMENTO" para filtrar detalhado
+        'prog_to_codigos': {
+            prog: (
+                dem[dem['PROGRAMA_ORC']==prog][['CODIGO','DEPARTAMENTO']]
+                .drop_duplicates()
+                .apply(lambda r: f"{r['CODIGO']}|{r['DEPARTAMENTO']}", axis=1)
+                .tolist()
+            )
+            for prog in dem['PROGRAMA_ORC'].dropna().unique()
+        },
+        # KPI: itens distintos demandados (unique CODIGOs)
+        'total_codigos_distintos': int(det['CODIGO'].nunique()),
+        # ABAIXO sub-período
+        'abaixo_1_2':  int(((det['COBERTURA_MESES'] >= 1) & (det['COBERTURA_MESES'] < 2)).sum()),
+        'abaixo_2_4':  int(((det['COBERTURA_MESES'] >= 2) & (det['COBERTURA_MESES'] < 4)).sum()),
+        'abaixo_4_7':  int(((det['COBERTURA_MESES'] >= 4) & (det['COBERTURA_MESES'] < 7)).sum()),
     }
 }
 
