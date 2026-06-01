@@ -683,21 +683,33 @@
             <div class="filter-group">
                 <div class="filter-item">
                     <label for="depto-filter">Departamento</label>
-                    <select id="depto-filter">
+                    <select id="depto-filter" onchange="filtrarDados()">
                         <option value="">Todos os Departamentos</option>
                     </select>
                 </div>
                 <div class="filter-item">
                     <label for="codigo-filter">Código / Descrição</label>
-                    <input id="codigo-filter" type="text" placeholder="Buscar por código ou descrição..." />
+                    <input id="codigo-filter" type="text" placeholder="Buscar por código ou descrição..." oninput="filtrarDados()" />
                 </div>
                 <div class="filter-item">
                     <label for="status-filter">Status de Cobertura</label>
-                    <select id="status-filter">
+                    <select id="status-filter" onchange="filtrarDados()">
                         <option value="">Todos</option>
                         <option value="CRÍTICO">Crítico</option>
                         <option value="ABAIXO">Abaixo do Período</option>
                         <option value="ADEQUADO">Adequado</option>
+                    </select>
+                </div>
+            </div>
+            <div class="filter-group" style="margin-top:0">
+                <div class="filter-item">
+                    <label for="status-consumo-filter">Status de Consumo</label>
+                    <select id="status-consumo-filter" onchange="filtrarDados()">
+                        <option value="">Todos</option>
+                        <option value="Acima do Plano">Acima do Plano</option>
+                        <option value="Conforme Plano">Conforme Plano</option>
+                        <option value="Abaixo do Plano">Abaixo do Plano</option>
+                        <option value="Sem Demanda Planejada">Sem Demanda Planejada</option>
                     </select>
                 </div>
             </div>
@@ -909,10 +921,14 @@
         }
 
         function renderizarTabelaDetalhado(dados) {
+            // Destroy BEFORE touching the DOM so DataTables doesn't restore old rows
+            if (dataTableInstances['detalhado']) {
+                dataTableInstances['detalhado'].destroy();
+                dataTableInstances['detalhado'] = null;
+            }
             const tbody = document.getElementById('tbody-detalhado');
             tbody.innerHTML = '';
 
-            // Dados já vêm agregados por CODIGO+DEPARTAMENTO e filtrados (só com demanda)
             const agregados = dados;
 
             agregados.forEach(item => {
@@ -965,7 +981,16 @@
             dataTableInstances['detalhado'] = $('#table-detalhado').DataTable({
                 paging: true,
                 pageLength: 25,
-                language: { url: 'https://cdn.datatables.net/plug-ins/1.10.24/i18n/Portuguese-Brasil.json' }
+                searching: false,   // usamos nosso próprio filtro Código/Descrição
+                dom: 'lrtip',       // remove caixa de busca duplicada do DataTables
+                language: {
+                    lengthMenu: 'Exibir _MENU_ registros por página',
+                    info: 'Mostrando _START_ a _END_ de _TOTAL_ registros',
+                    infoEmpty: 'Nenhum registro encontrado',
+                    infoFiltered: '(filtrado de _MAX_ registros)',
+                    paginate: { first:'Primeiro', last:'Último', next:'Próximo', previous:'Anterior' },
+                    emptyTable: 'Nenhum dado disponível'
+                }
             });
         }
 
@@ -1225,29 +1250,30 @@
 
         // Filtros
         function filtrarDados() {
-            const depto = document.getElementById('depto-filter').value;
-            const status = document.getElementById('status-filter').value;
-            const codigo = (document.getElementById('codigo-filter').value || '').trim().toLowerCase();
+            const depto         = document.getElementById('depto-filter').value;
+            const statusCob     = document.getElementById('status-filter').value;
+            const statusCons    = document.getElementById('status-consumo-filter').value;
+            const codigo        = (document.getElementById('codigo-filter').value || '').trim().toLowerCase();
 
-            let detalhado_filtrado = dadosCompletos.detalhado;
+            let filtrado = dadosCompletos.detalhado;
 
-            if (depto) detalhado_filtrado = detalhado_filtrado.filter(d => d.DEPARTAMENTO === depto);
-            if (status) detalhado_filtrado = detalhado_filtrado.filter(d => d.STATUS_COBERTURA === status);
-            if (codigo) {
-                detalhado_filtrado = detalhado_filtrado.filter(d =>
-                    String(d.CODIGO).toLowerCase().includes(codigo) ||
-                    String(d.DESCRICAO || '').toLowerCase().includes(codigo)
-                );
-            }
+            if (depto)      filtrado = filtrado.filter(d => d.DEPARTAMENTO     === depto);
+            if (statusCob)  filtrado = filtrado.filter(d => d.STATUS_COBERTURA === statusCob);
+            if (statusCons) filtrado = filtrado.filter(d => d.STATUS_CONSUMO   === statusCons);
+            if (codigo)     filtrado = filtrado.filter(d =>
+                String(d.CODIGO).toLowerCase().includes(codigo) ||
+                String(d.DESCRICAO || '').toLowerCase().includes(codigo)
+            );
 
-            tablesData.detalhado = detalhado_filtrado;
-            renderizarTabelaDetalhado(detalhado_filtrado);
-            inicializarAlertas(detalhado_filtrado);
+            tablesData.detalhado = filtrado;
+            renderizarTabelaDetalhado(filtrado);
+            inicializarAlertas(filtrado);
         }
 
         function limparFiltros() {
             document.getElementById('depto-filter').value = '';
             document.getElementById('status-filter').value = '';
+            document.getElementById('status-consumo-filter').value = '';
             document.getElementById('codigo-filter').value = '';
             tablesData.detalhado = dadosCompletos.detalhado;
             renderizarTabelaDetalhado(dadosCompletos.detalhado);
