@@ -109,9 +109,10 @@ def cobertura_meses(saldo_val, dem_jun_dez):
     return saldo_val / (dem_jun_dez / 7)
 
 def status_cobertura(meses):
+    """Período firme = Jun+Jul+Ago = 3 meses. CRÍTICO se não cobre o período firme."""
     if math.isinf(meses) or meses >= 7:
         return 'ADEQUADO'
-    elif meses >= 1:
+    elif meses >= 3:
         return 'ABAIXO'
     return 'CRÍTICO'
 
@@ -387,10 +388,14 @@ dados = {
         },
         # KPI: itens distintos demandados (unique CODIGOs)
         'total_codigos_distintos': int(det['CODIGO'].nunique()),
-        # ABAIXO sub-período
-        'abaixo_1_2':  int(((det['COBERTURA_MESES'] >= 1) & (det['COBERTURA_MESES'] < 2)).sum()),
-        'abaixo_2_4':  int(((det['COBERTURA_MESES'] >= 2) & (det['COBERTURA_MESES'] < 4)).sum()),
-        'abaixo_4_7':  int(((det['COBERTURA_MESES'] >= 4) & (det['COBERTURA_MESES'] < 7)).sum()),
+        # CRÍTICO sub-período (não cobre o período firme Jun-Ago = 3 meses)
+        'critico_0_1': int((det['COBERTURA_MESES'] < 1).sum()),
+        'critico_1_2': int(((det['COBERTURA_MESES'] >= 1) & (det['COBERTURA_MESES'] < 2)).sum()),
+        'critico_2_3': int(((det['COBERTURA_MESES'] >= 2) & (det['COBERTURA_MESES'] < 3)).sum()),
+        # ABAIXO sub-período (período firme ok, mas abaixo do adequado = 7 meses)
+        'abaixo_3_4':  int(((det['COBERTURA_MESES'] >= 3) & (det['COBERTURA_MESES'] < 4)).sum()),
+        'abaixo_4_5':  int(((det['COBERTURA_MESES'] >= 4) & (det['COBERTURA_MESES'] < 5)).sum()),
+        'abaixo_5_7':  int(((det['COBERTURA_MESES'] >= 5) & (det['COBERTURA_MESES'] < 7)).sum()),
     }
 }
 
