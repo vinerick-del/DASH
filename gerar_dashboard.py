@@ -135,10 +135,20 @@ depto_agg = (
 depto_agg['VARIANCIA_%'] = depto_agg.apply(
     lambda r: (r['CONSUMO_REAL_JAN_MAI']-r['DEMANDA_JAN_MAI'])/r['DEMANDA_JAN_MAI']*100
     if r['DEMANDA_JAN_MAI'] > 0 else 0, axis=1)
-depto_agg['CONSUMO_MES_MEDIO'] = depto_agg['CONSUMO_REAL_JAN_MAI'] / 5
-depto_agg['COBERTURA_MESES'] = depto_agg.apply(
-    lambda r: cobertura_meses(r['SALDO_TOTAL'], r['DEMANDA_JUN_DEZ']), axis=1)
-depto_agg['STATUS_COBERTURA'] = depto_agg['COBERTURA_MESES'].apply(status_cobertura)
+
+# Contagem de itens por status de cobertura (CODIGO+DEPARTAMENTO do detalhado)
+status_depto = (
+    det.groupby(['DEPARTAMENTO','STATUS_COBERTURA']).size()
+    .unstack(fill_value=0).reset_index()
+)
+for col in ['CRÍTICO','ABAIXO','ADEQUADO']:
+    if col not in status_depto.columns:
+        status_depto[col] = 0
+depto_agg = depto_agg.merge(
+    status_depto[['DEPARTAMENTO','CRÍTICO','ABAIXO','ADEQUADO']],
+    on='DEPARTAMENTO', how='left'
+).fillna({'CRÍTICO':0,'ABAIXO':0,'ADEQUADO':0})
+depto_agg[['CRÍTICO','ABAIXO','ADEQUADO']] = depto_agg[['CRÍTICO','ABAIXO','ADEQUADO']].astype(int)
 
 # ─────────────────────────────────────────────
 # 6. TABELA POR PROGRAMA ORÇAMENTÁRIO
@@ -195,10 +205,25 @@ prog_agg = prog_agg.merge(saldo_prog, on='PROGRAMA_ORC', how='left').fillna({'SA
 prog_agg['VARIANCIA_%'] = prog_agg.apply(
     lambda r: (r['CONSUMO_REAL_JAN_MAI']-r['DEMANDA_JAN_MAI'])/r['DEMANDA_JAN_MAI']*100
     if r['DEMANDA_JAN_MAI'] > 0 else 0, axis=1)
-prog_agg['CONSUMO_MES_MEDIO'] = prog_agg['CONSUMO_REAL_JAN_MAI'] / 5
-prog_agg['COBERTURA_MESES'] = prog_agg.apply(
-    lambda r: cobertura_meses(r['SALDO_TOTAL'], r['DEMANDA_JUN_DEZ']), axis=1)
-prog_agg['STATUS_COBERTURA'] = prog_agg['COBERTURA_MESES'].apply(status_cobertura)
+
+# Contagem de itens por status de cobertura por programa
+# Juntar status do detalhado (CODIGO+DEPTO) com os itens do programa
+prog_status = (
+    prog_det[['PROGRAMA_ORC','CODIGO','DEPARTAMENTO']].drop_duplicates()
+    .merge(det[['CODIGO','DEPARTAMENTO','STATUS_COBERTURA']], on=['CODIGO','DEPARTAMENTO'], how='left')
+)
+status_prog = (
+    prog_status.groupby(['PROGRAMA_ORC','STATUS_COBERTURA']).size()
+    .unstack(fill_value=0).reset_index()
+)
+for col in ['CRÍTICO','ABAIXO','ADEQUADO']:
+    if col not in status_prog.columns:
+        status_prog[col] = 0
+prog_agg = prog_agg.merge(
+    status_prog[['PROGRAMA_ORC','CRÍTICO','ABAIXO','ADEQUADO']],
+    on='PROGRAMA_ORC', how='left'
+).fillna({'CRÍTICO':0,'ABAIXO':0,'ADEQUADO':0})
+prog_agg[['CRÍTICO','ABAIXO','ADEQUADO']] = prog_agg[['CRÍTICO','ABAIXO','ADEQUADO']].astype(int)
 
 # ─────────────────────────────────────────────
 # 7. SERIALIZAR PARA JSON (tratar Infinity)
