@@ -226,7 +226,61 @@ prog_agg = prog_agg.merge(
 prog_agg[['CRÍTICO','ABAIXO','ADEQUADO']] = prog_agg[['CRÍTICO','ABAIXO','ADEQUADO']].astype(int)
 
 # ─────────────────────────────────────────────
-# 7. SERIALIZAR PARA JSON (tratar Infinity)
+# 7. ME2L – Pedidos em aberto
+# ─────────────────────────────────────────────
+me2l = pd.read_excel(BASE / 'ME2L.xlsx')
+me2l['Material'] = pd.to_numeric(me2l['Material'], errors='coerce')
+me2l = me2l.dropna(subset=['Material'])
+me2l['Material'] = me2l['Material'].astype(int)
+
+# Apenas linhas com quantidade pendente
+me2l_aberto = me2l[me2l['a ser fornecida (quantidade)'] > 0].copy()
+
+# Formatar datas como string para JSON
+for col in ['Data do documento', 'Data de remessa']:
+    me2l_aberto[col] = pd.to_datetime(me2l_aberto[col], errors='coerce').dt.strftime('%d/%m/%Y')
+
+me2l_aberto['Contrato básico'] = me2l_aberto['Contrato básico'].fillna(0).astype(int)
+me2l_aberto['Requisição de compra'] = me2l_aberto['Requisição de compra'].fillna(0).astype(int)
+
+# Totalizar por código para injetar na tabela detalhada
+pedido_por_codigo = (
+    me2l_aberto.groupby('Material', as_index=False)
+    .agg(QTD_PEDIDO=('a ser fornecida (quantidade)', 'sum'),
+         VALOR_PEDIDO=('a ser fornecido (valor', 'sum'),
+         PROXIMA_ENTREGA=('Data de remessa', 'min'))
+    .rename(columns={'Material': 'CODIGO'})
+)
+
+# Enriquecer detalhado com qtd em pedido e cobertura recalculada
+det = det.merge(pedido_por_codigo[['CODIGO','QTD_PEDIDO','VALOR_PEDIDO','PROXIMA_ENTREGA']],
+                on='CODIGO', how='left').fillna({'QTD_PEDIDO': 0, 'VALOR_PEDIDO': 0, 'PROXIMA_ENTREGA': ''})
+
+det['COBERTURA_COM_PEDIDO'] = det.apply(
+    lambda r: cobertura_meses(r['SALDO_ATUAL'] + r['QTD_PEDIDO'], r['DEMANDA_JUN_DEZ']), axis=1)
+det['STATUS_COB_COM_PEDIDO'] = det['COBERTURA_COM_PEDIDO'].apply(status_cobertura)
+
+# Lista completa de pedidos para a nova aba
+pedidos_records = me2l_aberto[[
+    'Material', 'Texto breve', 'Documento de compras', 'Requisição de compra',
+    'Contrato básico', 'Fornecedor/centro fornecedor',
+    'Data do documento', 'Data de remessa',
+    'a ser fornecida (quantidade)', 'a ser fornecido (valor'
+]].rename(columns={
+    'Material':                       'CODIGO',
+    'Texto breve':                    'DESCRICAO',
+    'Documento de compras':           'PEDIDO_COMPRA',
+    'Requisição de compra':           'REQUISICAO',
+    'Contrato básico':                'CONTRATO',
+    'Fornecedor/centro fornecedor':   'FORNECEDOR',
+    'Data do documento':              'DATA_DOCUMENTO',
+    'Data de remessa':                'DATA_REMESSA',
+    'a ser fornecida (quantidade)':   'QTD_A_RECEBER',
+    'a ser fornecido (valor':         'VALOR',
+}).sort_values(['DATA_REMESSA','CODIGO'])
+
+# ─────────────────────────────────────────────
+# 8. SERIALIZAR PARA JSON (tratar Infinity)
 # ─────────────────────────────────────────────
 def to_records(df):
     rows = []
@@ -247,14 +301,17 @@ def to_records(df):
     return rows
 
 dados = {
-    'detalhado':    to_records(det[[
+    'detalhado': to_records(det[[
         'CODIGO','DEPARTAMENTO','DESCRICAO',
         'DEMANDA_JAN_MAI','CONSUMO_REAL_JAN_MAI','DEMANDA_JUN_DEZ',
         'SALDO_ATUAL','CONSUMO_MES_MEDIO_JUN_DEZ',
-        'COBERTURA_MESES','STATUS_COBERTURA','STATUS_CONSUMO'
+        'COBERTURA_MESES','STATUS_COBERTURA','STATUS_CONSUMO',
+        'QTD_PEDIDO','VALOR_PEDIDO','PROXIMA_ENTREGA',
+        'COBERTURA_COM_PEDIDO','STATUS_COB_COM_PEDIDO'
     ]].sort_values(['DEPARTAMENTO','CODIGO'])),
     'departamentos': to_records(depto_agg.sort_values('DEPARTAMENTO')),
-    'programas':    to_records(prog_agg.sort_values('PROGRAMA_ORC')),
+    'programas':     to_records(prog_agg.sort_values('PROGRAMA_ORC')),
+    'pedidos':       to_records(pedidos_records),
     'filtros': {
         'departamentos': sorted(det['DEPARTAMENTO'].dropna().unique().tolist()),
         'programas':     sorted(dem['PROGRAMA_ORC'].dropna().unique().tolist()),
@@ -287,11 +344,10 @@ print("✓ HTML gerado:", out_path)
 print(f"  Detalhado : {len(dados['detalhado'])} linhas (CODIGO+DEPTO)")
 print(f"  Deptos    : {len(dados['departamentos'])}")
 print(f"  Programas : {len(dados['programas'])}")
+print(f"  Pedidos   : {len(dados['pedidos'])} linhas em aberto")
 print(f"\nVerificação 400072:")
 rows_400072 = [r for r in dados['detalhado'] if r['CODIGO']==400072]
 for r in rows_400072:
     print(f"  {r['DEPARTAMENTO']}: Real={r['CONSUMO_REAL_JAN_MAI']:.0f}, "
-          f"Dem Jan-Mai={r['DEMANDA_JAN_MAI']:.0f}, "
-          f"Dem Jun-Dez={r['DEMANDA_JUN_DEZ']:.0f}, "
-          f"Saldo={r['SALDO_ATUAL']:.0f}, "
-          f"Cobertura={r['COBERTURA_MESES']}, Status={r['STATUS_COBERTURA']}")
+          f"Saldo={r['SALDO_ATUAL']:.0f}, Pedido={r['QTD_PEDIDO']:.0f}, "
+          f"Cob.={r['COBERTURA_MESES']:.2f} → c/pedido={r['COBERTURA_COM_PEDIDO']:.2f} ({r['STATUS_COB_COM_PEDIDO']})")
