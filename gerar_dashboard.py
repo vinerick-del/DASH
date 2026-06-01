@@ -287,10 +287,36 @@ det['COBERTURA_COM_PEDIDO'] = det.apply(
     lambda r: cobertura_meses(r['SALDO_ATUAL'] + r['QTD_PEDIDO'], r['DEMANDA_JUN_DEZ']), axis=1)
 det['STATUS_COB_COM_PEDIDO'] = det['COBERTURA_COM_PEDIDO'].apply(status_cobertura)
 
-# QTD necessária para pedido: estoque seguro (7 meses) menos o que já existe+pedido
-det['QTD_NECESSARIA_PEDIDO'] = (
+# QTD necessária para pedido: calculada no nível do CODIGO (item único no estoque)
+# depois rateada pelo % de demanda anual de cada departamento
+det['DEMANDA_ANUAL'] = det['DEMANDA_JAN_MAI'] + det['DEMANDA_JUN_DEZ']
+
+# Totais por CODIGO (estoque e pedido são do item, não do departamento)
+codigo_totals = det.groupby('CODIGO', as_index=False).agg(
+    DEMANDA_ANUAL_TOTAL=('DEMANDA_ANUAL', 'sum')
+)
+det = det.merge(codigo_totals, on='CODIGO', how='left')
+
+# Taxa base e estoque seguro no nível CODIGO (já temos TAXA_BASE por linha, mas
+# SALDO e QTD_PEDIDO são iguais em todas as linhas do mesmo CODIGO)
+# Qtd total necessária para o item
+det['QTD_NECESSARIA_TOTAL'] = (
     det['ESTOQUE_SEGURO'] - det['SALDO_ATUAL'] - det['QTD_PEDIDO']
 ).clip(lower=0).round(0)
+
+# Deduplica por CODIGO para pegar apenas um valor (saldo/pedido são iguais entre deptos)
+qtd_total_by_codigo = det.drop_duplicates('CODIGO')[['CODIGO','QTD_NECESSARIA_TOTAL']]
+det = det.drop(columns=['QTD_NECESSARIA_TOTAL']).merge(qtd_total_by_codigo, on='CODIGO', how='left')
+
+# Rateio: % da demanda anual do depto no total anual do CODIGO
+det['PROP_DEMANDA'] = det.apply(
+    lambda r: r['DEMANDA_ANUAL'] / r['DEMANDA_ANUAL_TOTAL']
+    if r['DEMANDA_ANUAL_TOTAL'] > 0 else 1.0 / max(1, (det['CODIGO'] == r['CODIGO']).sum()),
+    axis=1
+)
+det['QTD_NECESSARIA_PEDIDO'] = (
+    det['QTD_NECESSARIA_TOTAL'] * det['PROP_DEMANDA']
+).round(0)
 
 # Lista completa de pedidos para a nova aba
 pedidos_records = me2l_aberto[[
@@ -340,7 +366,8 @@ dados = {
         'COBERTURA_MESES','STATUS_COBERTURA','STATUS_CONSUMO',
         'QTD_PEDIDO','VALOR_PEDIDO','PROXIMA_ENTREGA',
         'COBERTURA_COM_PEDIDO','STATUS_COB_COM_PEDIDO',
-        'QTD_NECESSARIA_PEDIDO','TAXA_BASE','ESTOQUE_SEGURO'
+        'QTD_NECESSARIA_PEDIDO','TAXA_BASE','ESTOQUE_SEGURO',
+        'DEMANDA_ANUAL','PROP_DEMANDA','QTD_NECESSARIA_TOTAL'
     ]].sort_values(['DEPARTAMENTO','CODIGO'])),
     'departamentos': to_records(depto_agg.sort_values('DEPARTAMENTO')),
     'programas':     to_records(prog_agg.sort_values('PROGRAMA_ORC')),
