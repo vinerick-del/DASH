@@ -734,7 +734,6 @@
                                     <th>Código</th>
                                     <th>Descrição</th>
                                     <th>Departamento</th>
-                                    <th>Programa Orçamentário</th>
                                     <th>Real Jan-Mai</th>
                                     <th>Demanda Jan-Mai</th>
                                     <th>Status Consumo</th>
@@ -928,7 +927,53 @@
             const tbody = document.getElementById('tbody-detalhado');
             tbody.innerHTML = '';
 
-            dados.forEach(item => {
+            // Filtrar apenas códigos com demanda
+            const comDemanda = dados.filter(d => (d.DEMANDA_JAN_MAI > 0 || d.DEMANDA_JUN_DEZ > 0));
+
+            // Agregar por CODIGO + DEPARTAMENTO (eliminar duplicatas por Programa Orçamentário)
+            const mapa = {};
+            comDemanda.forEach(item => {
+                const chave = item.CODIGO + '||' + item.DEPARTAMENTO;
+                if (!mapa[chave]) {
+                    mapa[chave] = {
+                        CODIGO: item.CODIGO,
+                        DESCRICAO: item.DESCRICAO || '-',
+                        DEPARTAMENTO: item.DEPARTAMENTO || '-',
+                        DEMANDA_JAN_MAI: 0,
+                        CONSUMO_REAL_JAN_MAI: 0,
+                        SALDO_ATUAL: item.SALDO_ATUAL,  // saldo é por item, não por programa
+                        DEMANDA_JUN_DEZ: 0
+                    };
+                }
+                mapa[chave].DEMANDA_JAN_MAI    += item.DEMANDA_JAN_MAI;
+                mapa[chave].CONSUMO_REAL_JAN_MAI += item.CONSUMO_REAL_JAN_MAI;
+                mapa[chave].DEMANDA_JUN_DEZ     += item.DEMANDA_JUN_DEZ;
+            });
+
+            const agregados = Object.values(mapa).map(item => {
+                // Recalcular cobertura
+                const consMedioJunDez = item.DEMANDA_JUN_DEZ > 0 ? item.DEMANDA_JUN_DEZ / 7 : 0;
+                const cobMeses = consMedioJunDez > 0 ? item.SALDO_ATUAL / consMedioJunDez : Infinity;
+
+                // Recalcular status cobertura
+                let statusCobertura = 'ADEQUADO';
+                if (cobMeses !== Infinity && cobMeses < 1) statusCobertura = 'CRÍTICO';
+                else if (cobMeses !== Infinity && cobMeses < 7) statusCobertura = 'ABAIXO';
+
+                // Recalcular status consumo
+                let statusConsumo = 'Conforme Plano';
+                if (item.DEMANDA_JAN_MAI === 0) {
+                    statusConsumo = 'Sem Demanda';
+                } else {
+                    const var_pct = ((item.CONSUMO_REAL_JAN_MAI - item.DEMANDA_JAN_MAI) / item.DEMANDA_JAN_MAI) * 100;
+                    if (var_pct > 10) statusConsumo = 'Acima do Plano';
+                    else if (var_pct < -10) statusConsumo = 'Abaixo do Plano';
+                }
+
+                return { ...item, COBERTURA_MESES: cobMeses, STATUS_COBERTURA: statusCobertura, STATUS_CONSUMO: statusConsumo };
+            });
+
+            agregados.forEach(item => {
                 const tr = document.createElement('tr');
                 const statusConsumo = item.STATUS_CONSUMO;
                 const statusCobertura = item.STATUS_COBERTURA;
@@ -952,9 +997,8 @@
 
                 tr.innerHTML = `
                     <td><strong>${item.CODIGO}</strong></td>
-                    <td>${item.DESCRICAO || '-'}</td>
-                    <td>${item.DEPARTAMENTO || '-'}</td>
-                    <td>${item.PROGRAMA_ORC || '-'}</td>
+                    <td>${item.DESCRICAO}</td>
+                    <td>${item.DEPARTAMENTO}</td>
                     <td>${new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 0}).format(item.CONSUMO_REAL_JAN_MAI)}</td>
                     <td>${new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 0}).format(item.DEMANDA_JAN_MAI)}</td>
                     <td><span class="badge ${badgeConsumo}">${statusConsumo}</span></td>
@@ -1272,9 +1316,30 @@
         }
 
         function exportarCSV() {
-            const headers = ['Código','Descrição','Departamento','Programa Orçamentário','Real Jan-Mai','Demanda Jan-Mai','Status Consumo','Saldo (01/06)','Demanda Jun-Dez','Cobertura (meses)','Status Cobertura'];
-            const rows = tablesData.detalhado.map(item => [
-                item.CODIGO, item.DESCRICAO||'', item.DEPARTAMENTO||'', item.PROGRAMA_ORC||'',
+            // Reaplica a mesma agregação por CODIGO+DEPARTAMENTO usada na tabela
+            const comDemanda = tablesData.detalhado.filter(d => d.DEMANDA_JAN_MAI > 0 || d.DEMANDA_JUN_DEZ > 0);
+            const mapa = {};
+            comDemanda.forEach(item => {
+                const chave = item.CODIGO + '||' + item.DEPARTAMENTO;
+                if (!mapa[chave]) mapa[chave] = { CODIGO: item.CODIGO, DESCRICAO: item.DESCRICAO||'', DEPARTAMENTO: item.DEPARTAMENTO||'', DEMANDA_JAN_MAI: 0, CONSUMO_REAL_JAN_MAI: 0, SALDO_ATUAL: item.SALDO_ATUAL, DEMANDA_JUN_DEZ: 0 };
+                mapa[chave].DEMANDA_JAN_MAI    += item.DEMANDA_JAN_MAI;
+                mapa[chave].CONSUMO_REAL_JAN_MAI += item.CONSUMO_REAL_JAN_MAI;
+                mapa[chave].DEMANDA_JUN_DEZ     += item.DEMANDA_JUN_DEZ;
+            });
+            const agregados = Object.values(mapa).map(item => {
+                const consMedio = item.DEMANDA_JUN_DEZ > 0 ? item.DEMANDA_JUN_DEZ / 7 : 0;
+                const cobMeses = consMedio > 0 ? item.SALDO_ATUAL / consMedio : Infinity;
+                let statusCobertura = 'ADEQUADO';
+                if (cobMeses !== Infinity && cobMeses < 1) statusCobertura = 'CRÍTICO';
+                else if (cobMeses !== Infinity && cobMeses < 7) statusCobertura = 'ABAIXO';
+                let statusConsumo = 'Conforme Plano';
+                if (item.DEMANDA_JAN_MAI === 0) statusConsumo = 'Sem Demanda';
+                else { const v = ((item.CONSUMO_REAL_JAN_MAI - item.DEMANDA_JAN_MAI) / item.DEMANDA_JAN_MAI) * 100; if (v > 10) statusConsumo = 'Acima do Plano'; else if (v < -10) statusConsumo = 'Abaixo do Plano'; }
+                return { ...item, COBERTURA_MESES: cobMeses, STATUS_COBERTURA: statusCobertura, STATUS_CONSUMO: statusConsumo };
+            });
+            const headers = ['Código','Descrição','Departamento','Real Jan-Mai','Demanda Jan-Mai','Status Consumo','Saldo (01/06)','Demanda Jun-Dez','Cobertura (meses)','Status Cobertura'];
+            const rows = agregados.map(item => [
+                item.CODIGO, item.DESCRICAO, item.DEPARTAMENTO,
                 item.CONSUMO_REAL_JAN_MAI, item.DEMANDA_JAN_MAI, item.STATUS_CONSUMO,
                 item.SALDO_ATUAL, item.DEMANDA_JUN_DEZ,
                 item.COBERTURA_MESES === Infinity ? 'Infinito' : item.COBERTURA_MESES.toFixed(2),
